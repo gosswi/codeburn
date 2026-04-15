@@ -620,13 +620,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   )
 }
 
-function StaticDashboard({ projects, period }: { projects: ProjectSummary[]; period: Period }) {
+function StaticDashboard({ projects, period, activeProvider }: { projects: ProjectSummary[]; period: Period; activeProvider?: string }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} columns={columns} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
     </Box>
   )
 }
@@ -645,7 +645,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
     await waitUntilExit()
   } else {
     const { unmount } = render(
-      <StaticDashboard projects={projects} period={period} />,
+      <StaticDashboard projects={projects} period={period} activeProvider={provider} />,
       { patchConsole: false }
     )
     unmount()
