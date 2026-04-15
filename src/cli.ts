@@ -8,6 +8,10 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { renderDashboard } from './dashboard.js'
 import { providers } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { version } = require('../package.json')
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
 
 function getDateRange(period: string): { range: DateRange; label: string } {
@@ -56,7 +60,7 @@ function toPeriod(s: string): 'today' | 'week' | '30days' | 'month' {
 const program = new Command()
   .name('codeburn')
   .description('See where your AI coding tokens go - by task, tool, model, and project')
-  .version('0.4.1')
+  .version(version)
 
 program.hook('preAction', async () => {
   await loadCurrency()
