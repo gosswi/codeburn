@@ -50,11 +50,11 @@ function getDateRange(period: string): { range: DateRange; label: string } {
   }
 }
 
-function toPeriod(s: string): 'today' | 'week' | '30days' | '90days' | 'month' {
+function toPeriod(s: string): 'today' | 'week' | '30days' | '120days' | 'month' {
   if (s === 'today') return 'today'
   if (s === 'month') return 'month'
   if (s === '30days') return '30days'
-  if (s === '90days') return '90days'
+  if (s === '120days') return '120days'
   return 'week'
 }
 
