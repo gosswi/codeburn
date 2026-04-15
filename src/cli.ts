@@ -67,8 +67,9 @@ program
   .description('Interactive usage dashboard')
   .option('-p, --period <period>', 'Starting period: today, week, month, 30days', 'week')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
-    await renderDashboard(toPeriod(opts.period), opts.provider)
+    await renderDashboard(toPeriod(opts.period), opts.provider, opts.refresh)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -153,16 +154,18 @@ program
   .command('today')
   .description('Today\'s usage dashboard')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
-    await renderDashboard('today', opts.provider)
+    await renderDashboard('today', opts.provider, opts.refresh)
   })
 
 program
   .command('month')
   .description('This month\'s usage dashboard')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
-    await renderDashboard('month', opts.provider)
+    await renderDashboard('month', opts.provider, opts.refresh)
   })
 
 program

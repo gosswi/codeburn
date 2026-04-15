@@ -194,18 +194,16 @@ const _homeEncoded = homedir().replace(/\//g, '-')
 function shortProject(encoded: string): string {
   let path = encoded.replace(/^-/, '')
 
-  // Strip home dir prefix (e.g. "Users-torukmakto-" → "")
   if (path.startsWith(_homeEncoded.replace(/^-/, ''))) {
     path = path.slice(_homeEncoded.replace(/^-/, '').length).replace(/^-/, '')
   }
 
-  // Strip common system prefixes
   path = path
     .replace(/^private-tmp-[^-]+-[^-]+-/, '')  // /private/tmp/<org>/<env>/
     .replace(/^private-tmp-/, '')
     .replace(/^tmp-/, '')
 
-  if (!path) return '~'
+  if (!path) return 'home'
 
   const parts = path.split('-').filter(Boolean)
   if (parts.length <= 3) return parts.join('/')
@@ -485,10 +483,11 @@ function DashboardContent({ projects, period, columns }: { projects: ProjectSumm
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, refreshSeconds }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
+  refreshSeconds?: number
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -527,6 +526,12 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider 
     setProjects(data)
     setLoading(false)
   }, [])
+
+  useEffect(() => {
+    if (!refreshSeconds || refreshSeconds <= 0) return
+    const id = setInterval(() => { reloadData(period, activeProvider) }, refreshSeconds * 1000)
+    return () => clearInterval(id)
+  }, [refreshSeconds, period, activeProvider, reloadData])
 
   const switchPeriod = useCallback(async (newPeriod: Period) => {
     if (newPeriod === period) return
@@ -592,7 +597,7 @@ function StaticDashboard({ projects, period }: { projects: ProjectSummary[]; per
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all'): Promise<void> {
+export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number): Promise<void> {
   await loadPricing()
   const range = getDateRange(period)
   const projects = await parseAllSessions(range, provider)
@@ -601,7 +606,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
 
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} />
+      <InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} refreshSeconds={refreshSeconds} />
     )
     await waitUntilExit()
   } else {
