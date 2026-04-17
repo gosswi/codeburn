@@ -66,11 +66,15 @@ The language rewrite evaluation (TypeScript vs Rust/Go/Python/Swift) was thoroug
 
 During Phase 2 implementation, the implementer guarded cache writes with `if (!dateRange)`, which sounded correct (don't cache partial results) but made the performance target unreachable -- `status` always passes `dateRange`, so cache hits were always 0. This was caught during T10 verification (manual DEBUG logging), not by the implementation skill itself. The skill should have verified its performance claims against the spec targets before marking the task complete.
 
-### 5. create-pr not detecting existing PRs
+### 5. create-pr went for original project instead of this fork everytime
+
+The /create-pr skill always created the PR against the original repository. Although this could be right in many cases, in this particular session Claude was mandated to use the fork main branch as base. This issue could be troubling if the PR against the original repo was approved and megered (improbable yet not impossible). A more clear ruleset for PR creation would have avoided this: a default way suggestion always origin for forked repos, or explicit questions regarding where to point the PR.
+
+### 6. create-pr not detecting existing PRs
 
 In this session, the create-pr skill generated a `gh pr create` command for a branch that already had an open PR (#72). It should check `gh pr list --head <branch>` first and offer `gh pr edit` instead. Minor, but avoidable.
 
-### 6. Sandbox limitations blocking npm audit
+### 7. Sandbox limitations blocking npm audit
 
 The full audit skill could not run `npm audit` due to sandbox network restrictions. This is an environment constraint, not a toolkit bug, but it's worth noting that security audit skills that can't reach package registries have a blind spot.
 
@@ -116,9 +120,11 @@ The toolkit's most valuable property is its self-correction loop. Across all int
 
 4. **Adaptive verbosity for architect**: If the conclusion is decisive ("don't rewrite"), the output should be short. The 10-dimension comparison matrix is useful when the decision is close; it's noise when it's not.
 
-5. **create-pr should check for existing PRs**: A simple `gh pr list --head <branch>` before generating the create command would avoid duplicate PR attempts and offer edit instead.
+5. **create-pr should have more guidelines**: A more robust default guideline or explicitly asking the user how to write and where to point the PR could be really useful to avoid ambiguities.
 
-6. **Benchmark / performance-analysis integration**: The performance-analysis skill produces before/after numbers, and the benchmark script produces detailed comparisons. These could be a single workflow where the toolkit runs the benchmark and produces the analysis in one pass.
+6. **create-pr should check for existing PRs**: A simple `gh pr list --head <branch>` before generating the create command would avoid duplicate PR attempts and offer edit instead.
+
+7. **Benchmark / performance-analysis integration**: The performance-analysis skill produces before/after numbers, and the benchmark script produces detailed comparisons. These could be a single workflow where the toolkit runs the benchmark and produces the analysis in one pass.
 
 ### For users of the toolkit
 
