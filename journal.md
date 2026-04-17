@@ -157,3 +157,20 @@ The purpose of this Journal is to give a well detailed, but still readble, feedb
 **Self-correction**: The `!dateRange` cache guard was a correctness-motivated design choice that made the performance target unreachable. Diagnosed during T10 verification (0 cache hits observed via DEBUG logging), root cause traced to how `status` calls `parseAllSessions`, fixed by restructuring to cache-full-then-filter.
 
 ---
+
+## 2026-04-17 -- benchmark (v0.5.0 npm vs Phase 2 local)
+
+**Action**: Wrote `scripts/benchmark.ts` -- a self-contained benchmark that compares the published npm package (v0.5.0, Phase 1 only) against the local Phase 2 build across 3 commands x 3 variants (installed / local-cold / local-warm), 7 runs each. Outputs a styled HTML report to `docs/specs/performance-optimization-v2/benchmark-results.html`.
+**Value**: Confirmed Phase 2 warm-cache gains on real session data (21 projects). See full report at `docs/specs/performance-optimization-v2/benchmark-results.html`.
+
+| Command | v0.5.0 (npm) | Phase 2 cold | Phase 2 warm | Warm speedup |
+|---|---|---|---|---|
+| `status --format json` | 960ms | 580ms | 310ms | **3.1x** |
+| `status --format menubar` | 1520ms | 580ms | 330ms | **4.6x** |
+| `status --format terminal` | 710ms | 590ms | 310ms | **2.3x** |
+
+Cold start (Phase 2, no cache) is already ~1.5x faster than v0.5.0 for json/menubar due to Phase 1 optimizations (readline streaming, timestamp pre-filter, bash extraction flag). Warm cache adds another ~1.9x on top of that.
+**Limitations**: Installed v0.5.0 is measured via Homebrew global symlink (adds ~10-15ms). Cold Phase 2 runs clear `~/.cache/codeburn/session-cache.db` before each run.
+**Self-correction**: N/A.
+
+---
