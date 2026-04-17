@@ -21,6 +21,8 @@ import type {
 } from './types.js'
 import { classifyTurn, BASH_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
+import { openCache, getCachedSummary, putCachedSummary, getFileFingerprint } from './session-cache.js'
+import type { SessionCacheDb } from './session-cache.js'
 
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
@@ -273,13 +275,31 @@ export function extractTimestampFromLine(line: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-async function parseSessionFile(
+export async function parseSessionFile(
   filePath: string,
   project: string,
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
   extractBash = true,
+  db: SessionCacheDb | null = null,
 ): Promise<SessionSummary | null> {
+  // R4, R5: when db is available, cache full sessions (no date filter) and apply range after.
+  // This ensures the same cached session can serve any dateRange query.
+  let fingerprint: { mtimeMs: number; size: number } | null = null
+  if (db) {
+    fingerprint = getFileFingerprint(filePath)
+    if (fingerprint) {
+      const cached = getCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size)
+      if (cached) {
+        return dateRange ? filterSessionByDateRange(cached, dateRange) : cached
+      }
+    }
+  }
+
+  // When using cache: parse full session (no date filter) so cached result serves all ranges.
+  // When no cache (db=null): apply date filter during parse for Phase 1 behavior (AC7).
+  const parseRange = db ? undefined : dateRange
+
   let rl
   try {
     rl = createInterface({ input: createReadStream(filePath), crlfDelay: Infinity })
@@ -291,13 +311,13 @@ async function parseSessionFile(
   try {
     for await (const line of rl) {
       if (!line.trim()) continue
-      if (dateRange) {
+      if (parseRange) {
         const ts = extractTimestampFromLine(line)
-        if (ts !== null && (ts < dateRange.start || ts > dateRange.end)) continue
+        if (ts !== null && (ts < parseRange.start || ts > parseRange.end)) continue
       }
       const entry = parseJsonlLine(line)
       if (!entry) continue
-      if (dateRange && !entry.timestamp && entry.type !== 'user') continue
+      if (parseRange && !entry.timestamp && entry.type !== 'user') continue
       entries.push(entry)
     }
   } catch {
@@ -312,7 +332,29 @@ async function parseSessionFile(
   const turns = groupIntoTurns(entries, seenMsgIds, extractBash)
   const classified = turns.map(classifyTurn)
 
-  return buildSessionSummary(sessionId, project, classified)
+  // R7, R9: zero userMessage after classifyTurn (which reads it), before cache write
+  for (const turn of classified) {
+    turn.userMessage = ''
+  }
+
+  const summary = buildSessionSummary(sessionId, project, classified)
+
+  // R4: write full session to cache before applying any date filter
+  if (db && fingerprint) {
+    putCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size, summary)
+  }
+
+  return dateRange ? filterSessionByDateRange(summary, dateRange) : summary
+}
+
+function filterSessionByDateRange(session: SessionSummary, range: DateRange): SessionSummary | null {
+  const filteredTurns = session.turns.filter(turn => {
+    if (!turn.timestamp) return true
+    const ts = new Date(turn.timestamp)
+    return ts >= range.start && ts <= range.end
+  })
+  if (filteredTurns.length === 0) return null
+  return buildSessionSummary(session.sessionId, session.project, filteredTurns)
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -331,14 +373,14 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return jsonlFiles
 }
 
-async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange, extractBash = true): Promise<ProjectSummary[]> {
+async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange, extractBash = true, db: SessionCacheDb | null = null): Promise<ProjectSummary[]> {
   const projectMap = new Map<string, SessionSummary[]>()
 
   for (const { path: dirPath, name: dirName } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
 
     for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, extractBash)
+      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, extractBash, db)
       if (session && session.apiCalls > 0) {
         const existing = projectMap.get(dirName) ?? []
         existing.push(session)
@@ -422,6 +464,7 @@ async function parseProviderSources(
 
       const turn = providerCallToTurn(call)
       const classified = classifyTurn(turn)
+      classified.userMessage = ''  // R8, R9: zero after classifyTurn, before storing
       const key = `${providerName}:${call.sessionId}:${source.project}`
 
       const existing = sessionMap.get(key)
@@ -503,11 +546,14 @@ export async function parseAllSessions(dateRangeOrOpts?: DateRange | ParseOption
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(pf)
 
+  // R5: open cache once per parseAllSessions invocation
+  const db = await openCache()
+
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
   const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange, extractBash)
+  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange, extractBash, db)
 
   const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
   for (const source of nonClaudeSources) {
