@@ -268,21 +268,28 @@ func (p *Provider) DiscoverSessions() ([]provider.SessionSource, error) {
 	if entries, err := os.ReadDir(projectsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
-				sources = append(sources, provider.SessionSource{
-					Path:     filepath.Join(projectsDir, e.Name()),
-					Project:  e.Name(),
-					Provider: "claude",
-				})
+				projectDir := filepath.Join(projectsDir, e.Name())
+				project := e.Name()
+				for _, filePath := range collectJSONLFiles(projectDir) {
+					sources = append(sources, provider.SessionSource{
+						Path:     filePath,
+						Project:  project,
+						Provider: "claude",
+					})
+				}
 			}
 		}
 	}
 
 	for _, dir := range findDesktopProjectDirs(getDesktopSessionsDir(), 0) {
-		sources = append(sources, provider.SessionSource{
-			Path:     dir,
-			Project:  filepath.Base(dir),
-			Provider: "claude",
-		})
+		project := filepath.Base(dir)
+		for _, filePath := range collectJSONLFiles(dir) {
+			sources = append(sources, provider.SessionSource{
+				Path:     filePath,
+				Project:  project,
+				Provider: "claude",
+			})
+		}
 	}
 
 	return sources, nil
@@ -290,13 +297,11 @@ func (p *Provider) DiscoverSessions() ([]provider.SessionSource, error) {
 
 func (p *Provider) ParseSession(source provider.SessionSource, seenKeys map[string]struct{}) iter.Seq2[provider.ParsedCall, error] {
 	return func(yield func(provider.ParsedCall, error) bool) {
-		for _, filePath := range collectJSONLFiles(source.Path) {
-			var calls []provider.ParsedCall
-			parseFile(filePath, seenKeys, &calls)
-			for _, call := range calls {
-				if !yield(call, nil) {
-					return
-				}
+		var calls []provider.ParsedCall
+		parseFile(source.Path, seenKeys, &calls)
+		for _, call := range calls {
+			if !yield(call, nil) {
+				return
 			}
 		}
 	}

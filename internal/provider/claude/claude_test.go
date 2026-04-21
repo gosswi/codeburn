@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/agentseal/codeburn/internal/provider"
@@ -59,7 +60,7 @@ func TestBasicAssistantCall(t *testing.T) {
 	seenKeys := make(map[string]struct{})
 
 	var calls []provider.ParsedCall
-	for call, err := range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
+	for call, err := range p.ParseSession(makeSource(filepath.Join(dir, "session1.jsonl"), "proj"), seenKeys) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -102,7 +103,7 @@ func TestDeduplicationByMsgID(t *testing.T) {
 	p := &Provider{}
 	seenKeys := make(map[string]struct{})
 	var count int
-	for _, _ = range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
+	for _, _ = range p.ParseSession(makeSource(filepath.Join(dir, "s.jsonl"), "proj"), seenKeys) {
 		count++
 	}
 	if count != 1 {
@@ -128,7 +129,7 @@ func TestDeduplicationFallbackKey(t *testing.T) {
 	p := &Provider{}
 	seenKeys := make(map[string]struct{})
 	var count int
-	for _, _ = range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
+	for _, _ = range p.ParseSession(makeSource(filepath.Join(dir, "s.jsonl"), "proj"), seenKeys) {
 		count++
 	}
 	if count != 1 {
@@ -146,7 +147,7 @@ func TestInvalidJSONLinesSkipped(t *testing.T) {
 	p := &Provider{}
 	seenKeys := make(map[string]struct{})
 	var count int
-	for _, _ = range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
+	for _, _ = range p.ParseSession(makeSource(filepath.Join(dir, "s.jsonl"), "proj"), seenKeys) {
 		count++
 	}
 	if count != 1 {
@@ -177,7 +178,7 @@ func TestSubagentJSONLIncluded(t *testing.T) {
 	p := &Provider{}
 	seenKeys := make(map[string]struct{})
 	var count int
-	for _, _ = range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
+	for _, _ = range p.ParseSession(makeSource(filepath.Join(subagentsDir, "sub.jsonl"), "proj"), seenKeys) {
 		count++
 	}
 	if count != 1 {
@@ -235,16 +236,177 @@ func TestGlobalDedupAcrossFiles(t *testing.T) {
 			"content": []map[string]any{},
 		},
 	}
-	writeJSONL(t, filepath.Join(dir, "a.jsonl"), []map[string]any{entry})
-	writeJSONL(t, filepath.Join(dir, "b.jsonl"), []map[string]any{entry})
+	fileA := filepath.Join(dir, "a.jsonl")
+	fileB := filepath.Join(dir, "b.jsonl")
+	writeJSONL(t, fileA, []map[string]any{entry})
+	writeJSONL(t, fileB, []map[string]any{entry})
 
 	p := &Provider{}
 	seenKeys := make(map[string]struct{})
-	var count int
-	for _, _ = range p.ParseSession(makeSource(dir, "proj"), seenKeys) {
-		count++
+
+	var countA int
+	for _, _ = range p.ParseSession(makeSource(fileA, "proj"), seenKeys) {
+		countA++
 	}
-	if count != 1 {
-		t.Errorf("global dedup: expected 1, got %d", count)
+	var countB int
+	for _, _ = range p.ParseSession(makeSource(fileB, "proj"), seenKeys) {
+		countB++
+	}
+	if countA != 1 {
+		t.Errorf("file A: expected 1 call, got %d", countA)
+	}
+	if countB != 0 {
+		t.Errorf("file B: expected 0 (deduped via shared seenKeys), got %d", countB)
+	}
+}
+
+func TestDiscoverSessions_PerFileEmission(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	proj1 := filepath.Join(dir, "projects", "proj1")
+	proj2 := filepath.Join(dir, "projects", "proj2")
+	os.MkdirAll(proj1, 0o755)
+	os.MkdirAll(proj2, 0o755)
+
+	writeJSONL(t, filepath.Join(proj1, "a.jsonl"), nil)
+	writeJSONL(t, filepath.Join(proj1, "b.jsonl"), nil)
+	writeJSONL(t, filepath.Join(proj2, "c.jsonl"), nil)
+	writeJSONL(t, filepath.Join(proj2, "d.jsonl"), nil)
+
+	p := &Provider{}
+	allSources, err := p.DiscoverSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to sources within our temp dir (desktop sessions may add extras).
+	var sources []provider.SessionSource
+	for _, src := range allSources {
+		if strings.HasPrefix(src.Path, dir) {
+			sources = append(sources, src)
+		}
+	}
+
+	if len(sources) != 4 {
+		t.Fatalf("expected 4 sources in temp dir, got %d", len(sources))
+	}
+	for _, src := range sources {
+		if !strings.HasSuffix(src.Path, ".jsonl") {
+			t.Errorf("source Path %q does not end in .jsonl", src.Path)
+		}
+	}
+	proj1Sources := 0
+	proj2Sources := 0
+	for _, src := range sources {
+		if src.Project == "proj1" {
+			proj1Sources++
+		}
+		if src.Project == "proj2" {
+			proj2Sources++
+		}
+	}
+	if proj1Sources != 2 {
+		t.Errorf("expected 2 sources for proj1, got %d", proj1Sources)
+	}
+	if proj2Sources != 2 {
+		t.Errorf("expected 2 sources for proj2, got %d", proj2Sources)
+	}
+}
+
+func TestDiscoverSessions_SubagentProject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	projDir := filepath.Join(dir, "projects", "myproj")
+	subagentsDir := filepath.Join(projDir, "some-uuid", "subagents")
+	os.MkdirAll(projDir, 0o755)
+	os.MkdirAll(subagentsDir, 0o755)
+
+	writeJSONL(t, filepath.Join(projDir, "session.jsonl"), nil)
+	writeJSONL(t, filepath.Join(subagentsDir, "sub.jsonl"), nil)
+
+	p := &Provider{}
+	allSources, err := p.DiscoverSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to sources within our temp dir.
+	var sources []provider.SessionSource
+	for _, src := range allSources {
+		if strings.HasPrefix(src.Path, dir) {
+			sources = append(sources, src)
+		}
+	}
+
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 sources in temp dir, got %d", len(sources))
+	}
+	for _, src := range sources {
+		if src.Project != "myproj" {
+			t.Errorf("source Project = %q, want %q", src.Project, "myproj")
+		}
+	}
+}
+
+func TestDiscoverSessions_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	os.MkdirAll(filepath.Join(dir, "projects", "emptyproj"), 0o755)
+
+	p := &Provider{}
+	allSources, err := p.DiscoverSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to sources within our temp dir.
+	for _, src := range allSources {
+		if strings.HasPrefix(src.Path, dir) {
+			t.Errorf("expected 0 sources in temp dir, got one: %s", src.Path)
+		}
+	}
+}
+
+func TestParseSession_SingleFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{
+		{
+			"type":      "assistant",
+			"timestamp": "2024-01-01T00:00:01Z",
+			"sessionId": "s1",
+			"message": map[string]any{
+				"id":      "msg_a",
+				"model":   "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 10, "output_tokens": 5},
+				"content": []map[string]any{},
+			},
+		},
+		{
+			"type":      "assistant",
+			"timestamp": "2024-01-01T00:00:02Z",
+			"sessionId": "s1",
+			"message": map[string]any{
+				"id":      "msg_b",
+				"model":   "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 20, "output_tokens": 10},
+				"content": []map[string]any{},
+			},
+		},
+	})
+
+	p := &Provider{}
+	seenKeys := make(map[string]struct{})
+	var calls []provider.ParsedCall
+	for call, err := range p.ParseSession(makeSource(filePath, "proj"), seenKeys) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls = append(calls, call)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls from single file, got %d", len(calls))
 	}
 }

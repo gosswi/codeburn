@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/agentseal/codeburn/internal/provider"
+	"github.com/agentseal/codeburn/internal/provider/claude"
 	"github.com/agentseal/codeburn/internal/types"
 )
 
@@ -212,6 +215,379 @@ func TestBuildSessionSummary_ToolBreakdown(t *testing.T) {
 	}
 	if _, ok := summary.McpBreakdown["atlassian"]; !ok {
 		t.Error("expected atlassian in McpBreakdown")
+	}
+}
+
+// claudeSource creates a SessionSource for a single Claude JSONL file.
+func claudeSource(filePath string) provider.SessionSource {
+	return provider.SessionSource{Path: filePath, Project: "proj", Provider: "claude"}
+}
+
+// TestParseSource_CacheHit_Claude verifies that a cache hit skips re-parsing (AC-04).
+// Pre-populates the cache with a fake summary; expects parseSource to return the fake data.
+func TestParseSource_CacheHit_Claude(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, oldTime, oldTime)
+
+	cache := openTestCache(t)
+	mtimeMs, fileSize, err := GetFileFingerprint(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeSummary := testSummary()
+	fakeSummary.APICalls = 99
+	cache.PutCachedSummary(filePath, mtimeMs, fileSize, fakeSummary)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.APICalls != 99 {
+		t.Errorf("expected cache hit (APICalls=99), got APICalls=%d", result.APICalls)
+	}
+}
+
+// TestParseSource_CacheMiss_Claude verifies that a cold cache miss triggers a parse
+// and writes the result to the cache (AC-05).
+func TestParseSource_CacheMiss_Claude(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, oldTime, oldTime)
+
+	cache := openTestCache(t)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result == nil || result.APICalls == 0 {
+		t.Fatalf("expected non-nil result with calls, got %v", result)
+	}
+
+	mtimeMs, fileSize, _ := GetFileFingerprint(filePath)
+	cached, _ := cache.GetCachedSummary(filePath, mtimeMs, fileSize)
+	if cached == nil {
+		t.Error("expected summary to be written to cache after miss")
+	}
+}
+
+// TestParseSource_FingerprintInvalidation_Claude verifies that a fingerprint change
+// invalidates the cache entry (AC-06).
+func TestParseSource_FingerprintInvalidation_Claude(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, oldTime, oldTime)
+
+	cache := openTestCache(t)
+	mtimeMs1, fileSize1, _ := GetFileFingerprint(filePath)
+	fakeSummary := testSummary()
+	fakeSummary.APICalls = 99
+	cache.PutCachedSummary(filePath, mtimeMs1, fileSize1, fakeSummary)
+
+	// Verify pre-condition: cache is hit with F1
+	var globalSeen sync.Map
+	prov := &claude.Provider{}
+	result := parseSource(claudeSource(filePath), prov, &globalSeen, cache, nil)
+	if result == nil || result.APICalls != 99 {
+		t.Fatalf("pre-condition: expected cache hit (APICalls=99), got %v", result)
+	}
+
+	// Change mtime → new fingerprint F2
+	newTime := time.Now().Add(-8 * time.Second)
+	os.Chtimes(filePath, newTime, newTime)
+
+	globalSeen = sync.Map{}
+	result = parseSource(claudeSource(filePath), prov, &globalSeen, cache, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result after fingerprint change")
+	}
+	if result.APICalls == 99 {
+		t.Error("expected cache miss after fingerprint change; got stale cached result")
+	}
+	if result.APICalls != 1 {
+		t.Errorf("expected APICalls=1 from fresh parse, got %d", result.APICalls)
+	}
+}
+
+// TestParseSource_MtimeGuard_Within5s verifies that a file modified within the last 5s
+// bypasses both cache read and write but is still parsed (AC-07).
+func TestParseSource_MtimeGuard_Within5s(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+	// File was just written: mtime < 5s ago → guard fires
+
+	cache := openTestCache(t)
+	mtimeMs, fileSize, _ := GetFileFingerprint(filePath)
+
+	// Pre-populate cache with a fake entry at this fingerprint
+	fakeSummary := testSummary()
+	fakeSummary.APICalls = 99
+	cache.PutCachedSummary(filePath, mtimeMs, fileSize, fakeSummary)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result (file parsed despite mtime guard)")
+	}
+	// Guard bypasses cache read: should return real parse result, not fake 99
+	if result.APICalls == 99 {
+		t.Error("mtime guard should bypass cache read; got stale pre-populated fake data")
+	}
+	if result.APICalls != 1 {
+		t.Errorf("expected fresh parse APICalls=1, got %d", result.APICalls)
+	}
+	// Guard bypasses cache write: fake entry (99) should be unchanged
+	inCache, _ := cache.GetCachedSummary(filePath, mtimeMs, fileSize)
+	if inCache == nil || inCache.APICalls != 99 {
+		t.Errorf("mtime guard should bypass cache write; expected unchanged fake entry (APICalls=99), got %v", inCache)
+	}
+}
+
+// TestParseSource_MtimeGuard_Boundary verifies that a file at exactly 5000ms old
+// is NOT guarded (guard condition is < 5000, so 5000ms uses the cache) (AC-08).
+func TestParseSource_MtimeGuard_Boundary(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+
+	// Set mtime to 5000ms ago. At the point of the guard check, elapsed will be >= 5000ms.
+	boundaryTime := time.Now().Add(-5000 * time.Millisecond)
+	os.Chtimes(filePath, boundaryTime, boundaryTime)
+
+	cache := openTestCache(t)
+	mtimeMs, fileSize, _ := GetFileFingerprint(filePath)
+
+	fakeSummary := testSummary()
+	fakeSummary.APICalls = 99
+	cache.PutCachedSummary(filePath, mtimeMs, fileSize, fakeSummary)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result at 5000ms boundary")
+	}
+	if result.APICalls != 99 {
+		t.Errorf("at 5000ms boundary, cache should be used: expected APICalls=99, got %d", result.APICalls)
+	}
+}
+
+// TestParseSource_TurnGrouping verifies that user+assistant pairs become separate turns (AC-09).
+func TestParseSource_TurnGrouping(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	ts := func(offset int) string {
+		return time.Now().Add(time.Duration(offset) * time.Second).UTC().Format(time.RFC3339)
+	}
+	writeJSONL(t, filePath, []map[string]any{
+		{"type": "user", "timestamp": ts(0), "sessionId": "s",
+			"message": map[string]any{"role": "user", "content": "q1"}},
+		{"type": "assistant", "timestamp": ts(1), "sessionId": "s",
+			"message": map[string]any{
+				"id": "m1", "model": "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 10, "output_tokens": 5},
+				"content": []map[string]any{},
+			}},
+		{"type": "user", "timestamp": ts(2), "sessionId": "s",
+			"message": map[string]any{"role": "user", "content": "q2"}},
+		{"type": "assistant", "timestamp": ts(3), "sessionId": "s",
+			"message": map[string]any{
+				"id": "m2", "model": "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 20, "output_tokens": 10},
+				"content": []map[string]any{},
+			}},
+	})
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, nil, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.APICalls != 2 {
+		t.Errorf("expected APICalls=2, got %d", result.APICalls)
+	}
+	if len(result.Turns) != 2 {
+		t.Errorf("expected 2 turns, got %d", len(result.Turns))
+	}
+}
+
+// TestParseSource_FingerprintError verifies that a nonexistent file returns nil
+// with no cache operations (AC-10).
+func TestParseSource_FingerprintError(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "nonexistent.jsonl")
+
+	cache := openTestCache(t)
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result != nil {
+		t.Errorf("expected nil result for nonexistent file, got %v", result)
+	}
+}
+
+// TestParseSource_WriteError verifies that a nil cache returns a valid summary without
+// panicking (AC-11).
+func TestParseSource_WriteError(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	writeJSONL(t, filePath, []map[string]any{assistantEntry("m1", "claude-sonnet-4-5", 100, 50)})
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, nil, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result with nil cache")
+	}
+	if result.APICalls != 1 {
+		t.Errorf("expected APICalls=1, got %d", result.APICalls)
+	}
+}
+
+// TestParseSource_UserMessageZeroed verifies the privacy invariant: UserMessage is
+// zeroed in the in-memory result and in the cached round-trip (AC-12).
+func TestParseSource_UserMessageZeroed(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+	ts := time.Now().UTC().Format(time.RFC3339)
+	writeJSONL(t, filePath, []map[string]any{
+		{"type": "user", "timestamp": ts, "sessionId": "s",
+			"message": map[string]any{"role": "user", "content": "secret prompt"}},
+		{"type": "assistant", "timestamp": ts, "sessionId": "s",
+			"message": map[string]any{
+				"id": "m1", "model": "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 10, "output_tokens": 5},
+				"content": []map[string]any{},
+			}},
+	})
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, oldTime, oldTime)
+
+	cache := openTestCache(t)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	for i, turn := range result.Turns {
+		if turn.UserMessage != "" {
+			t.Errorf("result.Turns[%d].UserMessage = %q, want empty", i, turn.UserMessage)
+		}
+	}
+
+	// Round-trip through cache
+	mtimeMs, fileSize, _ := GetFileFingerprint(filePath)
+	cached, _ := cache.GetCachedSummary(filePath, mtimeMs, fileSize)
+	if cached != nil {
+		for i, turn := range cached.Turns {
+			if turn.UserMessage != "" {
+				t.Errorf("cached.Turns[%d].UserMessage = %q, want empty", i, turn.UserMessage)
+			}
+		}
+	}
+}
+
+// TestParseSource_ZeroAPICalls verifies that an empty JSONL file returns nil
+// and nothing is written to the cache (AC-13).
+func TestParseSource_ZeroAPICalls(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "empty.jsonl")
+	writeJSONL(t, filePath, nil)
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, oldTime, oldTime)
+
+	cache := openTestCache(t)
+
+	var globalSeen sync.Map
+	result := parseSource(claudeSource(filePath), &claude.Provider{}, &globalSeen, cache, nil)
+
+	if result != nil {
+		t.Errorf("expected nil for empty JSONL, got %v", result)
+	}
+
+	mtimeMs, fileSize, _ := GetFileFingerprint(filePath)
+	cached, _ := cache.GetCachedSummary(filePath, mtimeMs, fileSize)
+	if cached != nil {
+		t.Error("expected no cache write for zero API calls")
+	}
+}
+
+// TestParseSource_DateFilterAfterCache verifies that the full summary is cached and
+// date filtering is applied after cache retrieval (AC-14).
+func TestParseSource_DateFilterAfterCache(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "session.jsonl")
+
+	recentTime := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	oldCallTime := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+
+	// Each assistant entry must be preceded by a user message so groupClaudeCalls
+	// creates two separate turns (one with oldCallTime, one with recentTime).
+	writeJSONL(t, filePath, []map[string]any{
+		{"type": "user", "timestamp": oldCallTime, "sessionId": "s",
+			"message": map[string]any{"role": "user", "content": "old question"}},
+		{
+			"type": "assistant", "timestamp": oldCallTime, "sessionId": "s",
+			"message": map[string]any{
+				"id": "m_old", "model": "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 100, "output_tokens": 50},
+				"content": []map[string]any{},
+			},
+		},
+		{"type": "user", "timestamp": recentTime, "sessionId": "s",
+			"message": map[string]any{"role": "user", "content": "recent question"}},
+		{
+			"type": "assistant", "timestamp": recentTime, "sessionId": "s",
+			"message": map[string]any{
+				"id": "m_recent", "model": "claude-sonnet-4-5",
+				"usage":   map[string]any{"input_tokens": 200, "output_tokens": 100},
+				"content": []map[string]any{},
+			},
+		},
+	})
+	fileOldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(filePath, fileOldTime, fileOldTime)
+
+	cache := openTestCache(t)
+
+	// First call: no dateRange → caches full summary (2 calls)
+	var globalSeen1 sync.Map
+	prov := &claude.Provider{}
+	full := parseSource(claudeSource(filePath), prov, &globalSeen1, cache, nil)
+	if full == nil || full.APICalls != 2 {
+		t.Fatalf("expected full summary with 2 calls, got %v", full)
+	}
+
+	// Second call: narrow dateRange → hits cache, applies filter → 1 call
+	now := time.Now()
+	dr := types.DateRange{
+		Start: now.Add(-2 * time.Hour).UnixMilli(),
+		End:   now.UnixMilli(),
+	}
+	var globalSeen2 sync.Map
+	filtered := parseSource(claudeSource(filePath), prov, &globalSeen2, cache, &dr)
+
+	if filtered == nil {
+		t.Fatal("expected non-nil filtered result")
+	}
+	if filtered.APICalls != 1 {
+		t.Errorf("expected 1 call after date filter, got %d", filtered.APICalls)
 	}
 }
 

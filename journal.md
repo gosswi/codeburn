@@ -396,6 +396,18 @@ Created `go.mod` with Go 1.23, added all runtime dependencies (bubbletea, lipglo
 
 ---
 
+## 2026-04-21 -- spec-evaluator (Claude JSONL per-file caching, two-writer comparison)
+
+**Action**: Codebase-blind evaluation of two competing spec drafts for the Claude per-file SQLite caching feature. Spec A (simplicity lens, 11R/12AC) scored 61/90. Spec B (defensive lens, 17R/20AC) scored 66/90. Produced full scoring matrix, per-spec analysis, conflict resolution, interview compliance check, and synthesis recommendations.
+
+**Value**: Spec B wins on completeness, edge case coverage, migration coverage, and risk mitigation. Spec A wins on clarity and internal consistency. Six gaps both specs missed were identified as P0 additions for the consolidation pass: (1) "Project" field never precisely defined (basename vs. full path -- cache key correctness depends on this), (2) empty .jsonl file path untested, (3) collectJSONLFiles error during DiscoverSessions unspecified, (4) PutCachedSummary write-error path has no verifying AC, (5) file path normalization not required (could cause spurious cache misses), (6) mtimeMs unit not explicitly required to be milliseconds (unit mismatch would break the guard for effectively all files). Key unique-to-B elements worth preserving: R-04 + AC-08 (GetFileFingerprint error path), R-16 + AC-16 (nil cache), AC-17 (race test for D-CONC-1), AC-18 (ParseAllSessions behavioral equivalence), AC-20 (cross-file dedup at ParseAllSessions level). Key unique-to-A elements: AC-07 (exact boundary test at 5000ms), AC-08 (behavioral turn-grouping assertion vs. B's internal-state assertion), design decision alternatives/rejection-rationale format.
+
+**Limitations**: Codebase-blind by design. Cannot verify that "Project = parent project directory name" matches the existing system's convention, that SessionID derivation from filename stem (AC-05 in B) is correct or even relevant, or that the mtimeMs unit assumption holds in the GetFileFingerprint implementation.
+
+**Self-correction**: B's AC-05 introduced "SessionID from filename stem" with no backing R-id. This is an unanchored behavioral assertion that neither the interview nor any R-id supports. The evaluator flagged it as a defect rather than a unique contribution. The consolidation pass must either anchor it with a new R-id or remove it.
+
+---
+
 ## 2026-04-21 -- generate-tasks (sqlite-driver-migration)
 
 **Action**: Generated `docs/specs/sqlite-driver-migration/tasks.md` from the approved spec (8 functional + 3 non-functional requirements, 7 constraints, 2 design decisions). Produced 9 tasks across 3 parallel groups plus 2 sequential tasks. File conflict matrix, dependency graph, and effort estimates included.
@@ -436,3 +448,37 @@ Fresh medians (7 runs):
 **Limitations**: macOS Gatekeeper kills unsigned binaries in `/tmp/` (exit 137) -- required building benchmark binaries to the project directory. OS page cache warmup from first run skewed early timings; this was caught and corrected (Python subprocess replaced with direct shell timing). The mattn binary was built with `CGO_ENABLED=1 go build` locally; the modernc comparison used the existing `./codeburn` binary built earlier in the same day.
 
 **Self-correction**: Initial benchmark showed suspiciously fast 5-12ms timings -- these were warm OS page cache hits from the first run loading all JSONL files into RAM. Switched to measuring both binaries cold after each other with 7 runs total to get stable medians. The null end-to-end result initially appeared to be a measurement error; investigation confirmed it is a genuine architectural finding (the SQLite cache is bypassed for the dominant workload).
+
+## 2026-04-21 -- generate-spec (claude-jsonl-per-file-caching)
+
+**Action**: Ran full multi-agent spec generation pipeline (researcher → 2 parallel writers → evaluator → consolidator → leader revision) for the per-file Claude JSONL caching feature. Conducted 6-question feature-tier interview. Consolidator initially produced Option B (cache loop inside parseSource); leader revised to Option A (per-file DiscoverSessions) after user confirmed performance priority. Added missing D-EDGE-1 mtime guard (5s) in leader revision. Final spec at `docs/specs/claude-jsonl-per-file-caching/`.
+
+**Value**: Surfaces two non-obvious implementation risks before code is written: (1) Option B would require a summary-merge function with no precedent in the codebase; (2) mtime guard must set `cacheKey = ""` specifically so the existing write guard fires without new branches. Evaluator gap analysis added 6 requirements that neither writer produced (nil-cache protection, GetFileFingerprint error path, empty-directory case, write-error behavioral AC, path normalization, mtimeMs unit).
+
+**Limitations**: Consolidator deviated from interview decision D-TRADE-1 (chose Option B without flagging it). Required a leader intervention round. The 5-second mtime guard was entirely absent from the consolidated spec despite being a binding interview decision — caught only during leader review.
+
+**Self-correction**: Spotted Option B deviation by cross-checking R-01 against D-TRADE-1. Spotted missing mtime guard by scanning design-decisions.md for D-EDGE-1. Both corrections required re-reading the interview decisions document against the spec outputs rather than trusting the consolidator's completion report.
+
+---
+
+## 2026-04-21 -- generate-tasks (claude-jsonl-per-file-caching)
+
+**Action**: Decomposed the per-file Claude JSONL caching spec (11 requirements, 15 ACs, 9 constraints) into 4 tasks across 2 parallel groups. Produced `docs/specs/claude-jsonl-per-file-caching/tasks.md` with file conflict matrix, dependency graph, and effort estimates.
+
+**Value**: File conflict matrix confirmed zero shared files across all 4 tasks, enabling maximum parallelism within each group. T1 (claude.go) and T2 (parser.go) have fully disjoint files and can run concurrently. T3 (claude_test.go) depends only on T1; T4 (parser_test.go, cache_test.go) depends on both T1 and T2. Total: 6-8h, ~3-4h wall-clock with parallel execution. Key test detail captured: T4's mtime guard boundary tests require `os.Chtimes` to set file timestamps >5s in the past; the boundary condition (exactly 5000ms) uses `< 5000` not `<= 5000`, so the 5000ms case must use cache.
+
+**Limitations**: None.
+
+**Self-correction**: N/A.
+
+---
+
+## 2026-04-21 -- implement (claude-jsonl-per-file-caching)
+
+**Action**: Implemented all 4 tasks from the per-file Claude JSONL caching spec. Modified `internal/provider/claude/claude.go` (DiscoverSessions emits one SessionSource per .jsonl file; ParseSession handles a single file path). Modified `internal/parser/parser.go` (removed `isClaudeDir` cache skip; added mtime guard: `cacheKey = ""` when `time.Now().UnixMilli()-mtimeMs < 5000`; retained `isClaudeDir` for turn-grouping). Added 11 tests to `internal/parser/parser_test.go` (AC-04 through AC-14). Fixed 5 existing claude_test.go tests that broke when ParseSession moved from directory to file scope; restructured `TestGlobalDedupAcrossFiles`; added 4 new DiscoverSessions and ParseSession tests. Updated `docs/specs/claude-jsonl-per-file-caching/traceability.md` with Code and Tests columns.
+
+**Value**: All 13 packages pass (`CGO_ENABLED=1 go test ./... -count=1`). Smoke test (`go run ./cmd/codeburn/ status --format json`) returns live data. Claude sessions now use the same fingerprint-based SQLite cache as Codex and Cursor -- re-parses only when files change. The mtime guard (`< 5000ms`) prevents cache writes for files modified in the last 5 seconds, avoiding stale-cache races without new branches (sets `cacheKey=""` to trigger the existing write guard). Subagent files automatically inherit the outer project directory name via early capture of `project := e.Name()` before `collectJSONLFiles`.
+
+**Limitations**: End-to-end wall-clock improvement not benchmarked post-implementation; the benchmark journal entry from the sqlite-driver migration identified Claude directory parsing as the dominant workload, so the improvement should be material on second invocations. Mtime guard boundary test (`TestParseSource_MtimeGuard_Boundary`) uses `os.Chtimes` to backdate file mtime to exactly 5000ms ago -- OS clock resolution may occasionally cause flakiness if the system clock moves during the test, but this is acceptable for a boundary test.
+
+**Self-correction**: Five existing claude_test.go tests broke because they passed a directory path to ParseSession (which previously walked files internally). After T1, ParseSession opens source.Path as a file directly -- directories produce empty reads. Fixed by changing each test to pass the specific .jsonl file path. The DiscoverSessions tests initially returned too many sources (44 vs expected 4) because `findDesktopProjectDirs` is independent of `CLAUDE_CONFIG_DIR` and picked up the developer's real Claude Desktop sessions. Fixed by filtering discovered sources to `strings.HasPrefix(src.Path, dir)`. The date-filter test (`TestParseSource_DateFilterAfterCache`) initially returned nil because two assistant entries without preceding user messages form a single turn -- `groupClaudeCalls` only starts a new turn on non-empty `UserMessage`. Fixed by adding user message entries before each assistant call.

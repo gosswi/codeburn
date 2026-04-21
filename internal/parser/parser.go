@@ -346,17 +346,15 @@ func parseSource(
 	var mtimeMs, fileSize int64
 	var cacheKey string
 
-	// Only cache non-directory sources (single files) or Claude dirs by path.
 	if cache != nil {
-		if isClaudeDir {
-			// Use mtime+size of the directory as fingerprint is not reliable;
-			// we skip SQLite caching for directory sources in this implementation.
-			// TODO: T11 in-process cache covers the hot path.
-		} else {
-			var err error
-			mtimeMs, fileSize, err = GetFileFingerprint(src.Path)
-			if err == nil {
-				cacheKey = src.Path
+		var err error
+		mtimeMs, fileSize, err = GetFileFingerprint(src.Path)
+		if err == nil {
+			cacheKey = src.Path
+			if time.Now().UnixMilli()-mtimeMs < 5000 {
+				cacheKey = ""
+			}
+			if cacheKey != "" {
 				cached, _ := cache.GetCachedSummary(cacheKey, mtimeMs, fileSize)
 				if cached != nil {
 					if dateRange != nil {
