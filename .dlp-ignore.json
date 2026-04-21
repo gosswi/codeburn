@@ -1,0 +1,22 @@
+[
+    {
+        "path": "docs/specs/go-migration/constraints.md",
+        "policy": "EmailPolicy",
+        "justification": "Project convention email address in spec documentation, not a real user email"
+    },
+    {
+        "path": "docs/specs/go-migration/acceptance-criteria.md",
+        "policy": "BrazilPIIPolicy",
+        "justification": "Date/currency format codes in spec documentation, not Brazilian PII"
+    },
+    {
+        "path": "docs/specs/go-migration/requirements.md",
+        "policy": "BrazilPIIPolicy",
+        "justification": "Date/currency format codes in spec documentation, not Brazilian PII"
+    },
+    {
+        "path": "docs/specs/go-migration/tasks.md",
+        "policy": "BrazilPIIPolicy",
+        "justification": "Date/currency format codes in spec documentation, not Brazilian PII"
+    }
+]
