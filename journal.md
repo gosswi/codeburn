@@ -350,3 +350,13 @@ Created `go.mod` with Go 1.23, added all runtime dependencies (bubbletea, lipglo
 **Self-correction**: The CLAUDE.md NEVER commit to main rule applies - all changes are on the feature/go-migration branch as expected. The postinstall.js uses `spawnSync` with fixed args (no user input) to avoid the command injection pattern flagged by the security hook.
 
 ---
+
+## 2026-04-21 -- benchmark (Go migration vs TS Phase 2 vs installed v0.5.0)
+
+**Action**: Ran a 7-run wall-clock and peak RSS benchmark across three variants for `status --format json/menubar/terminal`. Measured the installed npm v0.5.0 (no SQLite), the local TS Phase 2 build (SQLite warm, native C better-sqlite3), and the new Go binary (modernc.org/sqlite). Produced `docs/specs/go-migration/benchmark-results.html`.
+
+**Value**: Confirmed Go is 2.4-3.9x faster than the uncached installed version and holds a flat ~660ms independent of data growth. Discovered that `modernc.org/sqlite` (pure Go) neutralizes Go's parallel-parse speedup: the per-query overhead is high enough that cache lookups cost as much as fresh parsing, keeping Go consistently slower than TS Phase 2 (1.8x gap). Both optimized variants use ~100MB RSS vs 187-336MB for installed.
+
+**Limitations**: The menubar installed timing jumped from 1520ms (4 days ago) to 2576ms as session data accumulated - this linear degradation confirms the cache is essential, but the delta also means the two benchmark snapshots are not directly comparable without normalization. Go RSS varies 95-115MB between runs (goroutine pool tear-down timing); the median is stable but min/max spread is wider than TS.
+
+**Self-correction**: Initially assumed Go would outperform TS Phase 2 due to compiled language advantage. The benchmark disproved this: the bottleneck is the SQLite driver, not parsing speed. Noted in the HTML as a concrete next optimization: swap modernc.org/sqlite for mattn/go-sqlite3 (CGO) or use bbolt/badger for the cache layer to close the 1.8x gap.
