@@ -4,13 +4,13 @@
 
 **C1** - The Go binary must target Go 1.23 minimum (required for `iter.Seq2`).
 
-**C2** - The binary must be a single static executable with no shared libraries (no CGO). Build command: `go build -ldflags="-s -w" -o codeburn ./cmd/codeburn`. This enables cross-platform distribution.
+**C2** - The binary must be a single static executable with no shared libraries (no CGO). Build command: `go build -ldflags="-s -w" -o codeburn ./cmd/codeburn`. This enables cross-platform distribution. **[Superseded for darwin by `docs/specs/sqlite-driver-migration`: darwin builds use CGO_ENABLED=1 with mattn/go-sqlite3. This constraint remains binding for linux targets only.]**
 
 **C3** - The binary must compile for `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`. `windows/amd64` is a stretch goal (menubar integration is macOS-only).
 
 **C4** - The package structure must follow the layout in go-migration.md section 4. `internal/` packages are not importable by external Go modules.
 
-**C5** - `modernc.org/sqlite` must be used for all SQLite access (session cache and Cursor provider). No CGO SQLite bindings.
+**C5** - `modernc.org/sqlite` must be used for all SQLite access (session cache and Cursor provider). No CGO SQLite bindings. **[Superseded for darwin by `docs/specs/sqlite-driver-migration`: darwin uses mattn/go-sqlite3 (CGO). This constraint remains binding for linux targets only.]**
 
 **C6** - All regexes in `internal/classifier/classifier.go` must be compiled once at `var` initialization time (not inside functions called per-turn). This preserves the TypeScript behavior of module-level regex compilation.
 

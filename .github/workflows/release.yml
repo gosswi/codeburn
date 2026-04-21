@@ -23,6 +23,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Zig (darwin cross-compilation C toolchain)
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.13.0"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -31,4 +36,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CGO_ENABLED: 0

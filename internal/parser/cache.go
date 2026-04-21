@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/agentseal/codeburn/internal/sqlitedrv"
 	"github.com/agentseal/codeburn/internal/types"
 )
 
@@ -47,7 +46,7 @@ func openCacheAt(dbPath string, allowReset bool) (*SessionCache, error) {
 		return nil, nil
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open(sqlitedrv.DriverName, dbPath)
 	if err != nil {
 		return tryRecover(dbPath, allowReset)
 	}

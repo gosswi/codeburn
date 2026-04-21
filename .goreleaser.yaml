@@ -5,13 +5,28 @@ before:
     - go mod tidy
 
 builds:
-  - id: codeburn
+  - id: codeburn-darwin
+    main: ./cmd/codeburn
+    binary: codeburn
+    env:
+      - CGO_ENABLED=1
+      - CC=zig cc
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+    flags:
+      - -trimpath
+
+  - id: codeburn-linux
     main: ./cmd/codeburn
     binary: codeburn
     env:
       - CGO_ENABLED=0
     goos:
-      - darwin
       - linux
     goarch:
       - amd64

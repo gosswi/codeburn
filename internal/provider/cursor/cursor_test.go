@@ -7,16 +7,15 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/agentseal/codeburn/internal/provider"
+	"github.com/agentseal/codeburn/internal/sqlitedrv"
 )
 
 func createTestDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.vscdb")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open(sqlitedrv.DriverName, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +46,7 @@ func oldTime() string {
 func TestSchemaValidation_MissingTable(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.vscdb")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open(sqlitedrv.DriverName, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

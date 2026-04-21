@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/agentseal/codeburn/internal/models"
 	"github.com/agentseal/codeburn/internal/provider"
+	"github.com/agentseal/codeburn/internal/sqlitedrv"
 )
 
 const (
@@ -305,7 +304,7 @@ func (p *Provider) ParseSession(source provider.SessionSource, seenKeys map[stri
 			return
 		}
 
-		db, err := sql.Open("sqlite", source.Path)
+		db, err := sql.Open(sqlitedrv.DriverName, source.Path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "codeburn: cannot open Cursor database: %v\n", err)
 			return
