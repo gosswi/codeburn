@@ -47,6 +47,14 @@ npm run build                      # tsup -> dist/cli.js (single ESM bundle)
 
 **Deduplication**: Each provider has its own dedup strategy (API message ID for Claude, cumulative token cross-check for Codex, conversation/timestamp for Cursor). Dedup keys are tracked in a `Set<string>` passed to each parser.
 
+## Journal (MANDATORY)
+
+After completing ANY sdlc-toolkit skill or agent (architect, spec-writer, spec-evaluator, spec-researcher, generate-spec, evolve-spec, verify-spec, implement, code-review, create-pr, learn-codebase, security-scan, performance-analysis, generate-tasks, etc.), IMMEDIATELY append a journal entry to `journal.md` before responding to the user or moving on to other work.
+
+- Format: `## YYYY-MM-DD -- <skill-name> (<brief context>)` with **Action**, **Value**, **Limitations**, **Self-correction** fields
+- Newest entries go last (chronological order)
+- This is automatic -- do NOT wait for the user to ask
+
 ## Code Quality
 
 - Clean, minimal code. No dead code, no commented-out blocks, no TODO placeholders
