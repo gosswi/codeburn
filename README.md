@@ -25,6 +25,16 @@ Works by reading session data directly from disk. No wrapper, no proxy, no API k
 
 ## Install
 
+### Homebrew (macOS, recommended)
+
+```bash
+brew install agentseal/tap/codeburn
+```
+
+Single static binary, no runtime required.
+
+### npm
+
 ```bash
 npm install -g codeburn
 ```
@@ -37,9 +47,8 @@ npx codeburn
 
 ### Requirements
 
-- Node.js 20+
 - Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), and/or Cursor
-- For Cursor support: `better-sqlite3` is installed automatically as an optional dependency
+- npm install only: Node.js 20+, `better-sqlite3` installed automatically for Cursor support
 
 ## Usage
 
